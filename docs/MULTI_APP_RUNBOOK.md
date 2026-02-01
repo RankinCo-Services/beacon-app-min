@@ -32,7 +32,25 @@ Use this repo as a **template** to create new apps that run alongside the existi
    ```
    Render will build and deploy. Once the API has `DATABASE_URL`, the frontend will show **Database: connected**.
 
-## Optional: Zero-prompt run
+## Fully automated (gh + bootstrap, one shot)
+
+With `gh` (GitHub CLI) and `RENDER_API_KEY` set, you can create the repo from the template, clone it, and bootstrap Render in one flow:
+
+```bash
+# Create repo from template and clone (run from a directory where you want the clone, e.g. $HOME/GitHub)
+gh repo create RankinCo-Services/my-new-app --template RankinCo-Services/beacon-app-min --private --clone
+cd my-new-app
+
+# Bootstrap Render (use scripts/.secrets with RENDER_API_KEY for --no-prompt, or export RENDER_API_KEY)
+./scripts/render-bootstrap-multi-app.sh my-new-app tea-d5qerqf5r7bs738jbqmg https://github.com/RankinCo-Services/my-new-app --no-prompt
+
+# Push to trigger deploy (template content is already on main)
+git push origin main
+```
+
+Replace `my-new-app` with your app name. The script will create Postgres, API, and frontend on Render and set env (including DATABASE_URL from Render when available). Open the frontend URL once deploy completes and confirm **Database: connected**.
+
+## Optional: Zero-prompt run (bootstrap only)
 
 Create `scripts/.secrets` (do not commit):
 
@@ -55,16 +73,59 @@ If `DATABASE_URL` is not in secrets and connection-info is not ready yet, set it
 |------------|------------------|----------------------------|
 | Postgres   | `{APP_NAME}-db`  | App-only database          |
 | Web service| `{APP_NAME}-api`| Backend (Express + Prisma) |
-| Static site| `{APP_NAME}-frontend` | Vite + React frontend |
+| Static site| `{APP_NAME}-frontend` | Vite + React frontend (omit with `--in-platform`) |
 
 - **No** platform DB — this app uses only its own DB. When you add Beacon platform integration, you will point at the existing platform API (e.g. `PLATFORM_API_URL`).
-- API: `rootDir=backend`, build `npm install && npx prisma migrate deploy && npm run build`, start `node dist/index.js`.
-- Frontend: `rootDir=frontend`, build `npm install && npm run build`, publish `dist`. `VITE_API_URL` is set to the API URL.
+- API: `rootDir=backend`, build `npm install && npx prisma migrate deploy && npm run build`, start `node dist/index.js`. `FRONTEND_URL` is set for CORS (app frontend URL, or Beacon frontend URL when `--in-platform`).
+- Frontend: `rootDir=frontend`, build `npm install && npm run build`, publish `dist`. `VITE_API_URL` is set to the API URL. Omitted when `--in-platform`.
+
+## In-platform (app runs inside Beacon frontend)
+
+When the app’s UI runs as a **route inside the Beacon frontend** (e.g. `/apps/multi-app-test`), deploy only the app’s API and DB:
+
+```bash
+./scripts/render-bootstrap-multi-app.sh my-app tea-d5qerqf5r7bs738jbqmg https://github.com/RankinCo-Services/my-app --in-platform
+```
+
+The script creates **only** `{APP_NAME}-db` and `{APP_NAME}-api` (no frontend). It prompts for **BEACON_FRONTEND_URL** (Beacon frontend origin for CORS) or use `BEACON_FRONTEND_URL` in `scripts/.secrets` with `--no-prompt`.
+
+**Then in the Beacon repo:**
+
+1. Add the app module (e.g. `frontend/src/apps/<namespace>/`) and route `/apps/:appSlug`, and an entry in `frontend/src/config/appApis.ts` (API URL and display name).
+2. On **Beacon frontend** (Render): set `VITE_<APP_NAMESPACE>_API_URL` = this app’s API URL (e.g. `https://my-app-api.onrender.com`). Redeploy Beacon frontend so the build picks it up.
+3. On **app API** (Render): set `FRONTEND_URL` = Beacon frontend URL (e.g. `https://beacon-frontend-sy4c.onrender.com`) if not set by the script. Required for CORS when Beacon frontend calls the app API.
+4. **Register the app in the platform** so it appears in the app launcher (see [Adding a new app to the Beacon platform](#adding-a-new-app-to-the-beacon-platform) below).
+
+See Beacon **DEPLOYMENT.md** (in-platform apps env) for reference.
+
+## Adding a new app to the Beacon platform
+
+The Beacon app launcher shows only **apps that exist in the platform DB** and that the tenant is **subscribed** to. Restarting the Beacon API does **not** auto-discover new apps; the backend only seeds apps that are **hardcoded in the seeder** (today: `psa` and `multi-app-test`). To add a new app (e.g. `e2e-test`), use one of these:
+
+### Option A: Seed the app (restart API and it appears)
+
+1. In the **Beacon** repo, edit `backend/src/utils/permissionSeeder.ts`.
+2. Add a block for your app (same pattern as `multi-app-test`): create/update `App` with `namespace`, `name`, `description`, `status: 'published'`, `launch_url` (from env, e.g. `E2E_TEST_LAUNCH_URL` or hardcode), `version`.
+3. Restart the **Beacon API** (or redeploy). On startup, `bootstrapPlatform` runs `seedPermissions`, which creates or updates the app.
+4. In **Platform Admin → Subscriptions**, assign the app to the tenants that should see it in the launcher.
+
+### Option B: Create the app in Platform Admin (no code change)
+
+1. Log into Beacon as a platform admin.
+2. Go to **Platform Admin → Apps**.
+3. Click **Create app** and set: **Namespace** (e.g. `e2e-test`), **Name**, **Description**, **Launch URL** (e.g. `https://e2e-test-frontend.onrender.com`), **Status** = Published.
+4. In **Platform Admin → Subscriptions**, assign the app to the tenants that should see it.
+
+**Note:** For **in-platform** apps (UI inside Beacon at `/apps/<namespace>`), you still add the app module and route in the Beacon frontend and set env as in the In-platform section above; the Platform Admin App record is what makes the app appear in the launcher and allows subscriptions. The launcher then routes to `/apps/<namespace>` for in-platform apps (when configured in tenant-ui config).
 
 ## Verify
 
 1. Open the frontend URL (e.g. `https://my-new-app-frontend.onrender.com`).
 2. You should see **Beacon App (Min)** and **Database: connected** once the API has `DATABASE_URL` and has run migrations.
+
+## Adding the Beacon layout (sidebar, breadcrumbs, tenant switcher)
+
+To get the full Beacon layout instead of a minimal white page, follow [ADDING_BEACON_LAYOUT.md](ADDING_BEACON_LAYOUT.md): add **beacon-tenant** and **beacon-app-layout** as submodules, add dependencies, copy the layout entry files (`main.with-layout.tsx` → `main.tsx`, `App.with-layout.tsx` → `App.tsx`), set `VITE_PLATFORM_API_URL`, `VITE_CLERK_PUBLISHABLE_KEY`, and on Render use a build-from-root command with `git submodule update --init --recursive` and publish `frontend/dist`.
 
 ## Adding platform integration later
 

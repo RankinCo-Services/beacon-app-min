@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # render-bootstrap-multi-app.sh - Create Render resources for a multi-app (app-only) repo.
-# Creates: one Postgres, one web service (API), one static site (frontend).
-# Sets: DATABASE_URL on API, VITE_API_URL on frontend, SPA rewrite, project grouping.
+# Creates: one Postgres, one web service (API), and optionally one static site (frontend).
+# Sets: DATABASE_URL on API, FRONTEND_URL on API (for CORS), and when not in-platform: VITE_API_URL on frontend, SPA rewrite.
 #
 # Usage:
-#   ./scripts/render-bootstrap-multi-app.sh <APP_NAME> <OWNER_ID> <REPO_URL> [--secrets-file PATH] [--no-prompt] [DATABASE_URL]
+#   ./scripts/render-bootstrap-multi-app.sh <APP_NAME> <OWNER_ID> <REPO_URL> [--secrets-file PATH] [--no-prompt] [--in-platform] [DATABASE_URL]
 #
-#   APP_NAME   - e.g. my-app. Services: {APP_NAME}-db, -api, -frontend.
+#   APP_NAME   - e.g. my-app. Services: {APP_NAME}-db, -api, and -frontend (unless --in-platform).
 #   OWNER_ID   - Render workspace id (e.g. tea-d5qerqf5r7bs738jbqmg for RankinCo Services).
 #   REPO_URL   - https://github.com/ORG/REPO
-#   --secrets-file - File with RENDER_API_KEY, DATABASE_URL (KEY=value). Also: ./.secrets, ../.secrets.
-#   --no-prompt    - Non-interactive: use only secrets/env/args for DATABASE_URL.
+#   --secrets-file - File with RENDER_API_KEY, DATABASE_URL, BEACON_FRONTEND_URL (in-platform), PLATFORM_API_URL, CLERK_PUBLISHABLE_KEY (layout) (KEY=value).
+#   --no-prompt    - Non-interactive: use only secrets/env/args for DATABASE_URL and BEACON_FRONTEND_URL.
 #   --env-only     - Skip creating resources; only set project, env vars, SPA rewrite (services must exist).
+#   --in-platform  - Create only -db and -api (no frontend). App UI runs inside Beacon frontend. Sets FRONTEND_URL on API = Beacon frontend URL (for CORS). Prompt or BEACON_FRONTEND_URL in secrets.
 #
 # Env: RENDER_API_KEY (required).
 # Prerequisites: jq, curl.
@@ -25,14 +26,16 @@ log() { echo "[$(date +%Y-%m-%dT%H:%M:%S)] $*" >&2; }
 err() { echo "[$(date +%Y-%m-%dT%H:%M:%S)] ERROR: $*" >&2; }
 
 usage() {
-  echo "Usage: $0 <APP_NAME> <OWNER_ID> <REPO_URL> [--secrets-file PATH] [--no-prompt] [--env-only] [DATABASE_URL]"
-  echo "  APP_NAME   e.g. my-app. Services: {APP_NAME}-db, -api, -frontend."
+  echo "Usage: $0 <APP_NAME> <OWNER_ID> <REPO_URL> [--secrets-file PATH] [--no-prompt] [--env-only] [--in-platform] [DATABASE_URL]"
+  echo "  APP_NAME   e.g. my-app. Services: {APP_NAME}-db, -api, and -frontend (unless --in-platform)."
   echo "  OWNER_ID   Render workspace id (tea-xxx)."
   echo "  REPO_URL   https://github.com/ORG/REPO"
-  echo "  --secrets-file  File with RENDER_API_KEY, DATABASE_URL (KEY=value)."
+  echo "  --secrets-file  File with RENDER_API_KEY, DATABASE_URL, BEACON_FRONTEND_URL (in-platform)."
   echo "  --no-prompt     Non-interactive; use only secrets/env/args."
   echo "  --env-only      Skip create; only set project, env, SPA rewrite."
+  echo "  --in-platform   Create only -db and -api. App UI runs inside Beacon frontend. FRONTEND_URL on API = Beacon frontend URL."
   echo "  DATABASE_URL    Optional. Internal URL from {APP_NAME}-db -> Info."
+  echo "  PLATFORM_API_URL, CLERK_PUBLISHABLE_KEY  Optional. For Beacon layout (sidebar); set on frontend service."
   echo "Env: RENDER_API_KEY (required)."
   exit 1
 }
@@ -40,6 +43,7 @@ usage() {
 SECRETS_FILE=""
 NO_PROMPT=""
 ENV_ONLY=""
+IN_PLATFORM=""
 ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --secrets-file=*) SECRETS_FILE="${1#--secrets-file=}"; shift ;;
     --no-prompt)      NO_PROMPT=1; shift ;;
     --env-only)       ENV_ONLY=1; shift ;;
+    --in-platform)    IN_PLATFORM=1; shift ;;
     --help|-h)        usage ;;
     *)                ARGS+=( "$1" ); shift ;;
   esac
@@ -127,21 +132,27 @@ if [[ "$web_code" != "200" && "$web_code" != "201" ]]; then
 fi
 log "  Web service created."
 
-# --- 3. Create static site ---
-log "Creating static site: ${FRONTEND_NAME}"
-static_sd=$(jq -n --arg bc "npm install && npm run build" --arg pub "dist" \
-  '{buildCommand: $bc, publishPath: $pub}')
-static_json=$(jq -n --arg type "static_site" --arg name "$FRONTEND_NAME" --arg owner "$OWNER_ID" \
-  --arg repo "$REPO_URL" --argjson sd "$static_sd" \
-  '{type: $type, name: $name, ownerId: $owner, repo: $repo, branch: "main", rootDir: "frontend", autoDeploy: "yes", serviceDetails: $sd}')
-static_resp=$(api -X POST "${API_BASE}/services" -d "$static_json" 2>/dev/null) || true
-static_code=$(echo "$static_resp" | tail -n1)
-static_body=$(echo "$static_resp" | sed '$d')
-if [[ "$static_code" != "200" && "$static_code" != "201" ]]; then
-  err "Create static site failed (HTTP $static_code). Body: $static_body"
-  exit 1
+# --- 3. Create static site (skip when --in-platform: app UI runs inside Beacon frontend) ---
+# Layout default: build from repo root with submodules so Beacon sidebar (beacon-tenant, beacon-app-layout) is available.
+if [[ -z "${IN_PLATFORM:-}" ]]; then
+  log "Creating static site: ${FRONTEND_NAME}"
+  static_build="git submodule update --init --recursive && cd frontend && npm install && npm run build"
+  static_sd=$(jq -n --arg bc "$static_build" --arg pub "frontend/dist" \
+    '{buildCommand: $bc, publishPath: $pub}')
+  static_json=$(jq -n --arg type "static_site" --arg name "$FRONTEND_NAME" --arg owner "$OWNER_ID" \
+    --arg repo "$REPO_URL" --argjson sd "$static_sd" \
+    '{type: $type, name: $name, ownerId: $owner, repo: $repo, branch: "main", rootDir: ".", autoDeploy: "yes", serviceDetails: $sd}')
+  static_resp=$(api -X POST "${API_BASE}/services" -d "$static_json" 2>/dev/null) || true
+  static_code=$(echo "$static_resp" | tail -n1)
+  static_body=$(echo "$static_resp" | sed '$d')
+  if [[ "$static_code" != "200" && "$static_code" != "201" ]]; then
+    err "Create static site failed (HTTP $static_code). Body: $static_body"
+    exit 1
+  fi
+  log "  Static site created."
+else
+  log "Skipping static site (--in-platform: app UI runs inside Beacon frontend)."
 fi
-log "  Static site created."
 
 log "Waiting 10s for services to register..."
 sleep 10
@@ -172,26 +183,34 @@ if [[ -n "$PROJECT_ID" && "$PROJECT_ID" != "null" ]]; then
   log "Project created: id=$PROJECT_ID"
 fi
 
-# List services
+# List services (in-platform: only API, no frontend)
 svc_resp=$(api -X GET "${API_BASE}/services?limit=100" 2>/dev/null) || true
 svc_body=$(echo "$svc_resp" | sed '$d')
 collect() {
   echo "$svc_body" | jq -r --arg n "$1" '(if type == "array" then . elif .items then .items elif .services then .services else empty end) | .[]? | select(((.name // .service.name // "") | ascii_downcase) == (($n // "") | ascii_downcase)) | (.id // .service.id)' 2>/dev/null | head -1
 }
 API_SERVICE_ID=$(collect "$API_NAME")
-FRONTEND_SERVICE_ID=$(collect "$FRONTEND_NAME")
-if [[ -z "$API_SERVICE_ID" || -z "$FRONTEND_SERVICE_ID" ]]; then
+FRONTEND_SERVICE_ID=""
+if [[ -z "${IN_PLATFORM:-}" ]]; then
+  FRONTEND_SERVICE_ID=$(collect "$FRONTEND_NAME")
+fi
+if [[ -z "$API_SERVICE_ID" || ( -z "${IN_PLATFORM:-}" && -z "$FRONTEND_SERVICE_ID" ) ]]; then
   svc_resp=$(api -X GET "${API_BASE}/owners/${OWNER_ID}/services?limit=100" 2>/dev/null) || true
   svc_body=$(echo "$svc_resp" | sed '$d')
   API_SERVICE_ID=$(collect "$API_NAME")
-  FRONTEND_SERVICE_ID=$(collect "$FRONTEND_NAME")
+  [[ -z "${IN_PLATFORM:-}" ]] && FRONTEND_SERVICE_ID=$(collect "$FRONTEND_NAME")
 fi
-if [[ -z "$API_SERVICE_ID" || -z "$FRONTEND_SERVICE_ID" ]]; then
-  err "Could not find ${API_NAME} and/or ${FRONTEND_NAME}. Wait 1–2 min and re-run without creating services."
+if [[ -z "$API_SERVICE_ID" ]]; then
+  err "Could not find ${API_NAME}. Wait 1–2 min and re-run without creating services."
+  exit 1
+fi
+if [[ -z "${IN_PLATFORM:-}" && -z "$FRONTEND_SERVICE_ID" ]]; then
+  err "Could not find ${FRONTEND_NAME}. Wait 1–2 min and re-run without creating services."
   exit 1
 fi
 
-for sid in "$API_SERVICE_ID" "$FRONTEND_SERVICE_ID"; do
+for sid in "$API_SERVICE_ID" ${FRONTEND_SERVICE_ID:+"$FRONTEND_SERVICE_ID"}; do
+  [[ -z "$sid" ]] && continue
   if [[ -n "${PROJECT_ID:-}" ]]; then
     api -X PATCH "${API_BASE}/services/${sid}" -d "{\"projectId\":\"${PROJECT_ID}\"}" >/dev/null 2>&1 || true
   fi
@@ -233,8 +252,22 @@ if [[ -z "${DB_URL:-}" ]]; then
   fi
 fi
 
+# --- 4b. BEACON_FRONTEND_URL (--in-platform only): Beacon frontend origin for CORS ---
+if [[ -n "${IN_PLATFORM:-}" && -z "${BEACON_FRONTEND_URL:-}" && -z "${NO_PROMPT:-}" ]]; then
+  echo ""
+  echo "--- BEACON_FRONTEND_URL (Beacon frontend origin for CORS) ---"
+  echo "The app API is called from the Beacon frontend. Set FRONTEND_URL on the API to your Beacon frontend URL (e.g. https://beacon-frontend-sy4c.onrender.com)."
+  echo -n "Beacon frontend URL (or Enter to skip; set in Render Dashboard later): "
+  read -r BEACON_FRONTEND_URL </dev/tty 2>/dev/null || read -r BEACON_FRONTEND_URL || true
+fi
+
 # --- 5. API env: DATABASE_URL, FRONTEND_URL ---
-FRONTEND_URL_VAL="https://$(echo "${FRONTEND_NAME}" | tr '[:upper:]' '[:lower:]').onrender.com"
+# In-platform: FRONTEND_URL = Beacon frontend URL (calls come from Beacon). Otherwise: app's frontend URL.
+if [[ -n "${IN_PLATFORM:-}" && -n "${BEACON_FRONTEND_URL:-}" ]]; then
+  FRONTEND_URL_VAL="$BEACON_FRONTEND_URL"
+else
+  FRONTEND_URL_VAL="https://$(echo "${FRONTEND_NAME}" | tr '[:upper:]' '[:lower:]').onrender.com"
+fi
 if [[ -n "${API_SERVICE_ID:-}" ]]; then
   get_resp=$(api -X GET "${API_BASE}/services/${API_SERVICE_ID}/env-vars" 2>/dev/null) || true
   get_body=$(echo "$get_resp" | sed '$d')
@@ -249,24 +282,33 @@ if [[ -n "${API_SERVICE_ID:-}" ]]; then
   fi
 fi
 
-# --- 6. Frontend: VITE_API_URL, SPA rewrite ---
-VITE_VAL="https://$(echo "${API_NAME}" | tr '[:upper:]' '[:lower:]').onrender.com"
+# --- 6. Frontend: VITE_API_URL, VITE_PLATFORM_API_URL, VITE_CLERK_PUBLISHABLE_KEY, SPA rewrite (skip when --in-platform) ---
 if [[ -n "${FRONTEND_SERVICE_ID:-}" ]]; then
+  VITE_API_VAL="https://$(echo "${API_NAME}" | tr '[:upper:]' '[:lower:]').onrender.com"
   f_get=$(api -X GET "${API_BASE}/services/${FRONTEND_SERVICE_ID}/env-vars" 2>/dev/null) || true
   f_body=$(echo "$f_get" | sed '$d')
   f_arr=$(echo "$f_body" | jq -c 'if type == "object" and .envVars then .envVars elif type == "array" then . else [] end' 2>/dev/null) || f_arr="[]"
-  f_merged=$(echo "$f_arr" | jq -c --arg v "$VITE_VAL" '([.[]? | (.envVar // .) | select(.key != "VITE_API_URL") | {key: .key, value: .value}]) + [{key: "VITE_API_URL", value: $v}]')
+  # Build merged env: drop old VITE_* we set, then add VITE_API_URL and optionally layout vars (Beacon sidebar)
+  f_merged=$(echo "$f_arr" | jq -c --arg v "$VITE_API_VAL" \
+    --arg platform "${VITE_PLATFORM_API_URL:-${PLATFORM_API_URL:-}}" \
+    --arg clerk "${VITE_CLERK_PUBLISHABLE_KEY:-${CLERK_PUBLISHABLE_KEY:-}}" \
+    '([.[]? | (.envVar // .) | select(.key != "VITE_API_URL" and .key != "VITE_PLATFORM_API_URL" and .key != "VITE_CLERK_PUBLISHABLE_KEY") | {key: .key, value: .value}]) + [{key: "VITE_API_URL", value: $v}] + (if $platform != "" then [{key: "VITE_PLATFORM_API_URL", value: $platform}] else [] end) + (if $clerk != "" then [{key: "VITE_CLERK_PUBLISHABLE_KEY", value: $clerk}] else [] end)')
   api -X PUT "${API_BASE}/services/${FRONTEND_SERVICE_ID}/env-vars" -d "$f_merged" >/dev/null 2>&1 || true
   route_json=$(jq -n '{type: "rewrite", source: "/*", destination: "/index.html"}')
   api -X POST "${API_BASE}/services/${FRONTEND_SERVICE_ID}/routes" -d "$route_json" >/dev/null 2>&1 || true
-  log "VITE_API_URL and SPA rewrite set. Triggering frontend redeploy..."
+  log "VITE_API_URL (and optional VITE_PLATFORM_API_URL, VITE_CLERK_PUBLISHABLE_KEY) and SPA rewrite set. Triggering frontend redeploy..."
   api -X POST "${API_BASE}/services/${FRONTEND_SERVICE_ID}/deploys" -d "{}" >/dev/null 2>&1 || true
 fi
 
 echo ""
 echo "--- Done: ${APP_NAME} ---"
 _api_lower=$(echo "$API_NAME" | tr '[:upper:]' '[:lower:]')
-_front_lower=$(echo "$FRONTEND_NAME" | tr '[:upper:]' '[:lower:]')
-echo "  API: https://${_api_lower}.onrender.com  Frontend: https://${_front_lower}.onrender.com"
-echo "  Database status: open frontend URL and check 'Database: connected' once deploy completes."
+if [[ -n "${IN_PLATFORM:-}" ]]; then
+  echo "  API: https://${_api_lower}.onrender.com  (no frontend: app runs inside Beacon)"
+  echo "  Next: (1) In Beacon repo add app module + route and appApis.ts; (2) On Beacon frontend set VITE_<APP_NAMESPACE>_API_URL=https://${_api_lower}.onrender.com; (3) Register app in Platform Admin; (4) App API FRONTEND_URL = Beacon frontend URL (for CORS)."
+else
+  _front_lower=$(echo "$FRONTEND_NAME" | tr '[:upper:]' '[:lower:]')
+  echo "  API: https://${_api_lower}.onrender.com  Frontend: https://${_front_lower}.onrender.com"
+  echo "  Database status: open frontend URL and check 'Database: connected' once deploy completes."
+fi
 echo ""

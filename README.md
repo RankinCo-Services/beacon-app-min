@@ -2,7 +2,9 @@
 
 Minimal Beacon multi-app stub: **app-only** backend (one Postgres, Express + Prisma) and frontend (Vite + React) with a health check that shows **Database: connected** or **not connected**.
 
-Use this repo as a **template** to create new apps that deploy only app-specific Render services (one Postgres, API, frontend) and can later connect to an existing Beacon platform for identity and tenant context.
+Use this repo as a **template** to create new apps that deploy only app-specific Render services (one Postgres, API, and optionally frontend) and can connect to an existing Beacon platform for identity and tenant context.
+
+**New apps from this template include the Beacon layout by default** (sidebar, breadcrumbs, tenant switcher, user profile). Set `VITE_PLATFORM_API_URL` and `VITE_CLERK_PUBLISHABLE_KEY` on the frontend (Render env or `.secrets` when running the bootstrap script) so the layout works; until then the app shows a short config message.
 
 ## Quick start (from template)
 
@@ -10,11 +12,14 @@ Use this repo as a **template** to create new apps that deploy only app-specific
 2. Clone and run the bootstrap script:
    ```bash
    git clone https://github.com/RankinCo-Services/my-app.git && cd my-app
+   git submodule update --init --recursive
    ./scripts/render-bootstrap-multi-app.sh my-app <OWNER_ID> https://github.com/RankinCo-Services/my-app
    ```
-3. Push `main` to trigger Render deploy. Open the frontend URL and confirm **Database: connected**.
+3. Push `main` to trigger Render deploy. On the **frontend** service in Render, set **VITE_PLATFORM_API_URL** (Beacon platform API URL) and **VITE_CLERK_PUBLISHABLE_KEY** (same Clerk key as Beacon) so the sidebar and auth work. Open the frontend URL and confirm **Database: connected** and the Beacon sidebar.
 
-See [docs/MULTI_APP_RUNBOOK.md](docs/MULTI_APP_RUNBOOK.md) for full steps, secrets, and zero-prompt usage.
+**In-platform (app runs inside Beacon frontend):** Use `--in-platform` to create only `-db` and `-api` (no frontend). Then add the app module + route in the Beacon repo, set `VITE_<APP_NAMESPACE>_API_URL` on Beacon frontend and `FRONTEND_URL` on the app API (Beacon frontend URL for CORS). See [docs/MULTI_APP_RUNBOOK.md](docs/MULTI_APP_RUNBOOK.md) § In-platform.
+
+See [docs/MULTI_APP_RUNBOOK.md](docs/MULTI_APP_RUNBOOK.md) for full steps, secrets, and zero-prompt usage. For layout env and optional minimal (no-sidebar) setup, see [docs/ADDING_BEACON_LAYOUT.md](docs/ADDING_BEACON_LAYOUT.md).
 
 ## Local development
 
@@ -31,6 +36,6 @@ Frontend proxies `/api` to `http://localhost:3000`. Open http://localhost:5173 a
 ## Layout
 
 - `backend/` — Express + Prisma (app DB only), `GET /api/health` returns `{ database: 'connected' | 'not connected' }`.
-- `frontend/` — Vite + React, single page that displays DB status from `/api/health`.
-- `scripts/render-bootstrap-multi-app.sh` — Creates Render Postgres, web service, static site; sets env and SPA rewrite.
-- `scripts/.secrets.example` — Example for `RENDER_API_KEY` (and optional `DATABASE_URL`) for non-interactive runs.
+- `frontend/` — Vite + React with **Beacon layout by default** (sidebar, tenant switcher); dashboard shows DB status. Submodules: `beacon-tenant`, `beacon-app-layout`.
+- `scripts/render-bootstrap-multi-app.sh` — Creates Render Postgres, web service, static site (build from repo root with submodules); sets env and SPA rewrite. Optional `PLATFORM_API_URL` and `CLERK_PUBLISHABLE_KEY` in secrets for layout.
+- `scripts/.secrets.example` — Example for `RENDER_API_KEY`, optional `DATABASE_URL`, and optional `PLATFORM_API_URL` / `CLERK_PUBLISHABLE_KEY` for layout.
