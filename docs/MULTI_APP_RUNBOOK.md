@@ -2,6 +2,10 @@
 
 Use this repo as a **template** to create new apps that run alongside the existing Beacon platform. Each new app gets its **own** Render services (one Postgres, API, frontend) and connects to the **existing** platform for identity/tenant context when you add auth later.
 
+## Reusable prompt (minimal interaction)
+
+To create a new **in-platform** app (runs inside Beacon at `/apps/<app>`) with minimal user interaction, use the reusable prompt in **rco-developer-docs**: [docs/CREATE_IN_PLATFORM_APP_PROMPT.mdc](https://github.com/RankinCo-Services/rco-developer-docs/blob/main/docs/CREATE_IN_PLATFORM_APP_PROMPT.mdc). Say: **"Create a new in-platform beacon-app-min app named \<APP_NAME\>."** The prompt instructs the AI to: create repo from template, clone, bootstrap with `--in-platform --no-prompt`, push; then add the app to the Beacon repo (appApis, app module, InPlatformAppPage, permissionSeeder) and set Render env vars. Prerequisites: `RENDER_API_KEY` and optionally `BEACON_FRONTEND_URL` in `scripts/.secrets` for zero-prompt bootstrap.
+
 ## Prerequisites
 
 - `gh` (GitHub CLI), `jq`, `curl`
@@ -105,7 +109,7 @@ The Beacon app launcher shows only **apps that exist in the platform DB** and th
 ### Option A: Seed the app (restart API and it appears)
 
 1. In the **Beacon** repo, edit `backend/src/utils/permissionSeeder.ts`.
-2. Add a block for your app (same pattern as `multi-app-test`): create/update `App` with `namespace`, `name`, `description`, `status: 'published'`, `launch_url` (from env, e.g. `E2E_TEST_LAUNCH_URL` or hardcode), `version`.
+2. Add a block for your app (same pattern as `multi-app-test`): create/update `App` with `namespace`, `name`, `description`, `status: 'published'`, `launch_url`: **null for in-platform apps** (or from env for standalone, e.g. `E2E_TEST_LAUNCH_URL`), `version`.
 3. Restart the **Beacon API** (or redeploy). On startup, `bootstrapPlatform` runs `seedPermissions`, which creates or updates the app.
 4. In **Platform Admin → Subscriptions**, assign the app to the tenants that should see it in the launcher.
 
@@ -113,10 +117,12 @@ The Beacon app launcher shows only **apps that exist in the platform DB** and th
 
 1. Log into Beacon as a platform admin.
 2. Go to **Platform Admin → Apps**.
-3. Click **Create app** and set: **Namespace** (e.g. `e2e-test`), **Name**, **Description**, **Launch URL** (e.g. `https://e2e-test-frontend.onrender.com`), **Status** = Published.
+3. Click **Create app** and set:
+   - **In-platform apps** (UI inside Beacon at `/apps/<namespace>`): **Namespace** (e.g. `simple-to-do` — must match Beacon’s `appApis.ts` and route), **Name**, **Description**, **Launch URL: leave blank**, **Status** = Published. The launcher opens the app by **namespace** (routes to `/apps/<namespace>`); Launch URL is not used.
+   - **Standalone apps** (own frontend URL): **Namespace** (e.g. `e2e-test`), **Name**, **Description**, **Launch URL** = the app’s frontend URL (e.g. `https://e2e-test-frontend.onrender.com`), **Status** = Published.
 4. In **Platform Admin → Subscriptions**, assign the app to the tenants that should see it.
 
-**Note:** For **in-platform** apps (UI inside Beacon at `/apps/<namespace>`), you still add the app module and route in the Beacon frontend and set env as in the In-platform section above; the Platform Admin App record is what makes the app appear in the launcher and allows subscriptions. The launcher then routes to `/apps/<namespace>` for in-platform apps (when configured in tenant-ui config).
+**Note:** For **in-platform** apps, you still add the app module and route in the Beacon frontend and set env as in the In-platform section above; the Platform Admin App record is what makes the app appear in the launcher and allows subscriptions. The launcher routes by **namespace** to `/apps/<namespace>` for in-platform apps—do not set Launch URL for in-platform apps (leave it blank; you can clear an existing URL in Edit and Save).
 
 ## Verify
 
@@ -133,4 +139,4 @@ When you add Beacon platform (identity, RBAC, tenant context):
 
 - Set `PLATFORM_API_URL` (and optionally Clerk keys) on the API and frontend.
 - Use `@beacon/tenant-ui` and `@beacon/app-layout` in the frontend; add tenant/auth middleware in the backend.
-- Register the app in platform admin (Apps page) and set `launch_url` to this app’s frontend URL.
+- Register the app in platform admin (Apps page). For **in-platform** apps leave Launch URL blank; for **standalone** apps set `launch_url` to this app’s frontend URL.

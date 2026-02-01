@@ -39,3 +39,13 @@ Frontend proxies `/api` to `http://localhost:3000`. Open http://localhost:5173 a
 - `frontend/` — Vite + React with **Beacon layout by default** (sidebar, tenant switcher); dashboard shows DB status. Submodules: `beacon-tenant`, `beacon-app-layout`.
 - `scripts/render-bootstrap-multi-app.sh` — Creates Render Postgres, web service, static site (build from repo root with submodules); sets env and SPA rewrite. Optional `PLATFORM_API_URL` and `CLERK_PUBLISHABLE_KEY` in secrets for layout.
 - `scripts/.secrets.example` — Example for `RENDER_API_KEY`, optional `DATABASE_URL`, and optional `PLATFORM_API_URL` / `CLERK_PUBLISHABLE_KEY` for layout.
+
+## Migrations
+
+Create and validate Prisma migrations without a database connection. On Render, `npm start` runs `backend/scripts/start.sh`, which applies migrations and resolves common failures (P3018, "already exists") before starting the server. Pattern aligned with Beacon `backend/scripts/start.sh` (single-DB path).
+
+- **Create migration:** `./scripts/create-migration.sh <name>` (e.g. `add_task_table`)
+- **Create + commit:** `./scripts/migrate.sh <name> ["commit message"]`
+- **Validate SQL (idempotent):** `./scripts/validate-migration-sql.sh` or `--all` / `--fix --file path`
+- **In Render Shell (from backend/):** `./scripts/check-db.sh` (diagnose), `./scripts/resolve-migration.sh <name>` (resolve one failed migration by DB state)
+- **Docs:** [docs/MIGRATION_SQL_RULES.md](docs/MIGRATION_SQL_RULES.md), [docs/RESOLVE_MIGRATION_ERROR.md](docs/RESOLVE_MIGRATION_ERROR.md)
