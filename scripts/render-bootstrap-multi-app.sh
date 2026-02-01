@@ -11,6 +11,7 @@
 #   REPO_URL   - https://github.com/ORG/REPO
 #   --secrets-file - File with RENDER_API_KEY, DATABASE_URL (KEY=value). Also: ./.secrets, ../.secrets.
 #   --no-prompt    - Non-interactive: use only secrets/env/args for DATABASE_URL.
+#   --env-only     - Skip creating resources; only set project, env vars, SPA rewrite (services must exist).
 #
 # Env: RENDER_API_KEY (required).
 # Prerequisites: jq, curl.
@@ -24,12 +25,13 @@ log() { echo "[$(date +%Y-%m-%dT%H:%M:%S)] $*" >&2; }
 err() { echo "[$(date +%Y-%m-%dT%H:%M:%S)] ERROR: $*" >&2; }
 
 usage() {
-  echo "Usage: $0 <APP_NAME> <OWNER_ID> <REPO_URL> [--secrets-file PATH] [--no-prompt] [DATABASE_URL]"
+  echo "Usage: $0 <APP_NAME> <OWNER_ID> <REPO_URL> [--secrets-file PATH] [--no-prompt] [--env-only] [DATABASE_URL]"
   echo "  APP_NAME   e.g. my-app. Services: {APP_NAME}-db, -api, -frontend."
   echo "  OWNER_ID   Render workspace id (tea-xxx)."
   echo "  REPO_URL   https://github.com/ORG/REPO"
   echo "  --secrets-file  File with RENDER_API_KEY, DATABASE_URL (KEY=value)."
   echo "  --no-prompt     Non-interactive; use only secrets/env/args."
+  echo "  --env-only      Skip create; only set project, env, SPA rewrite."
   echo "  DATABASE_URL    Optional. Internal URL from {APP_NAME}-db -> Info."
   echo "Env: RENDER_API_KEY (required)."
   exit 1
@@ -37,12 +39,14 @@ usage() {
 
 SECRETS_FILE=""
 NO_PROMPT=""
+ENV_ONLY=""
 ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --secrets-file)   SECRETS_FILE="${2:-}"; shift 2 ;;
     --secrets-file=*) SECRETS_FILE="${1#--secrets-file=}"; shift ;;
     --no-prompt)      NO_PROMPT=1; shift ;;
+    --env-only)       ENV_ONLY=1; shift ;;
     --help|-h)        usage ;;
     *)                ARGS+=( "$1" ); shift ;;
   esac
@@ -80,6 +84,7 @@ FRONTEND_NAME="${APP_NAME}-frontend"
 auth() { echo "Authorization: Bearer $RENDER_API_KEY"; }
 api() { curl -sS -w "\n%{http_code}" -H "Accept: application/json" -H "Content-Type: application/json" -H "$(auth)" "$@"; }
 
+if [[ -z "${ENV_ONLY:-}" ]]; then
 # --- 1. Create Postgres ---
 log "Creating Postgres: ${DB_NAME}"
 pg_json=$(jq -n --arg name "$DB_NAME" --arg owner "$OWNER_ID" \
@@ -140,21 +145,31 @@ log "  Static site created."
 
 log "Waiting 10s for services to register..."
 sleep 10
+fi
 
 # --- 4. Create project and assign services ---
 log "Creating Render Project: $APP_NAME"
+PROJECT_ID=""
+parse_project_id() {
+  local b="$1"
+  echo "$b" | jq -r 'if type == "object" then (.id // .project.id // .projectId // empty) else empty end' 2>/dev/null || true
+}
 resp=$(api -X POST "${API_BASE}/projects" -d "{\"name\":\"${APP_NAME}\",\"ownerId\":\"${OWNER_ID}\"}" 2>/dev/null) || true
 http_code=$(echo "$resp" | tail -n1)
 body=$(echo "$resp" | sed '$d')
-PROJECT_ID=""
 if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
-  PROJECT_ID=$(echo "$body" | jq -r '.id // .project.id // empty')
+  PROJECT_ID=$(parse_project_id "$body")
 fi
 if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "null" ]]; then
   resp=$(api -X POST "${API_BASE}/owners/${OWNER_ID}/projects" -d "{\"name\":\"${APP_NAME}\"}" 2>/dev/null) || true
   http_code=$(echo "$resp" | tail -n1)
   body=$(echo "$resp" | sed '$d')
-  PROJECT_ID=$(echo "$body" | jq -r '.id // .project.id // empty')
+  if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+    PROJECT_ID=$(parse_project_id "$body")
+  fi
+fi
+if [[ -n "$PROJECT_ID" && "$PROJECT_ID" != "null" ]]; then
+  log "Project created: id=$PROJECT_ID"
 fi
 
 # List services
@@ -250,6 +265,8 @@ fi
 
 echo ""
 echo "--- Done: ${APP_NAME} ---"
-echo "  API: https://${API_NAME,,}.onrender.com  Frontend: https://${FRONTEND_NAME,,}.onrender.com"
+_api_lower=$(echo "$API_NAME" | tr '[:upper:]' '[:lower:]')
+_front_lower=$(echo "$FRONTEND_NAME" | tr '[:upper:]' '[:lower:]')
+echo "  API: https://${_api_lower}.onrender.com  Frontend: https://${_front_lower}.onrender.com"
 echo "  Database status: open frontend URL and check 'Database: connected' once deploy completes."
 echo ""
