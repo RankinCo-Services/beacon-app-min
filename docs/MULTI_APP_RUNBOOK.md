@@ -85,6 +85,8 @@ If `DATABASE_URL` is not in secrets and connection-info is not ready yet, set it
 
 ## In-platform (app runs inside Beacon frontend)
 
+**Pattern:** In-platform apps can be **dashboard-only** (single page, like this template) or **full-app** (many routes and navigation, like beacon-grc). For full-app in-platform apps, use the **Beacon in-platform app pattern**: app repo as Git submodule of Beacon, app has an exportable UI package (e.g. `packages/grc-ui`) that exports the root component; Beacon mounts it at `/apps/<namespace>/*`. See rco-developer-docs MULTI_APP_SUPPORT.mdc § In-platform Beacon app pattern.
+
 When the app’s UI runs as a **route inside the Beacon frontend** (e.g. `/apps/multi-app-test`), deploy only the app’s API and DB:
 
 ```bash
