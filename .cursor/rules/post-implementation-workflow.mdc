@@ -1,0 +1,30 @@
+---
+description: Default after implementation — ESLint, predeploy, commit, push development, monitor deploy until live, summary. Never push main unless user promotes.
+alwaysApply: true
+---
+
+# Post-implementation workflow (default)
+
+**Unless the user specifies otherwise**, after implementation run this workflow in order.
+
+## Branch and main
+
+- **All changes on `development`.** Never push or merge to `main` unless the user explicitly asks to promote to production.
+
+## Steps (in order, after implementation)
+
+1. **ESLint** — Run `npm run lint:fix` and `npm run lint:security:fix` (or equivalent) in each affected directory. Resolve all errors; zero errors before proceeding. Warnings OK.
+2. **Predeploy script** — Run the project’s predeploy check (e.g. `./scripts/pre-deploy-check.sh`) if present, to catch errors before a long build. Fix any failures.
+3. **Security and architecture review** — If the project has these (e.g. Beacon stack), run per project docs; show report; do not commit on FAIL unless user approves.
+4. **Commit** — All changes in their respective repos. Clear commit message from the implementation.
+5. **Push** — To `development` only.
+6. **Monitor deployment** — If this project deploys to Render (or similar), use Render MCP to watch build and service. **Fix all build and deployment errors automatically** until services are live. Do not hand the user "instructions to monitor" except when there is a **blocking issue only they can fix** — then give explicit step-by-step instructions.
+7. **Summary** — What was implemented, what was committed/pushed, and deployment outcome.
+
+## When you cannot fix a deployment issue
+
+- Only when the user must do something (e.g. set env var, approve, provide secret), give **explicit, step-by-step instructions**. No generic "monitor Render."
+
+## When the user specifies otherwise
+
+If the user says "only make the change, don't deploy," "don't push," or "just commit," follow that and skip the steps they exclude.

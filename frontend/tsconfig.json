@@ -14,7 +14,12 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@psa/*": ["../packages/app-ui/src/*"],
+      "@beacon/ui": ["../beacon-tenant/packages/beacon-ui/src/index.ts"],
+      "@beacon/ui/*": ["../beacon-tenant/packages/beacon-ui/src/*"]
+    }
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
