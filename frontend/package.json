@@ -13,6 +13,7 @@
   "dependencies": {
     "@beacon/app-layout": "file:../beacon-app-layout",
     "@beacon/tenant-ui": "file:../beacon-tenant/packages/tenant-ui",
+    "@beacon/ui": "file:../beacon-tenant/packages/beacon-ui",
     "@clerk/clerk-react": "^4.30.0",
     "axios": "^1.6.5",
     "lucide-react": "^0.344.0",
